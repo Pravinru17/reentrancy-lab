@@ -10,7 +10,7 @@ Built with **Solidity 0.8.20** and tested using **Foundry**.
 
 # Overview
 
-The project demonstrates the complete security workflow:
+The project demonstrates the complete smart-contract security workflow:
 
 ```text
 Vulnerable Contract
@@ -30,36 +30,36 @@ Document the Vulnerability
 
 The repository contains two versions of the bank:
 
-### `VulnerableBank`
+### VulnerableBank
 
-Intentionally contains a reentrancy vulnerability caused by performing an external ETH transfer before updating the user's balance.
+Intentionally contains a reentrancy vulnerability caused by performing an external ETH transfer **before updating the user's balance**.
 
-### `SecureBank`
+### SecureBank
 
 Demonstrates the remediation using:
 
-* Checks-Effects-Interactions
-* State update before external interaction
-* `nonReentrant` protection
-* Security regression tests
+- Checks-Effects-Interactions
+- State update before external interaction
+- `nonReentrant` protection
+- Security regression tests
 
 ---
 
 # Security Concepts Demonstrated
 
-* Single-function reentrancy
-* External contract calls
-* ETH transfer callbacks
-* `receive()` functions
-* Recursive contract execution
-* Checks-Effects-Interactions
-* Reentrancy guards
-* State accounting
-* Foundry testing
-* Fuzz testing
-* Proof-of-concept exploit development
-* Security regression testing
-* Vulnerability documentation
+- Single-function reentrancy
+- External contract calls
+- ETH transfer callbacks
+- `receive()` functions
+- Recursive contract execution
+- Checks-Effects-Interactions
+- Reentrancy guards
+- State accounting
+- Foundry testing
+- Fuzz testing
+- Proof-of-concept exploit development
+- Security regression testing
+- Vulnerability documentation
 
 ---
 
@@ -75,7 +75,7 @@ reentrancy-lab/
 │
 ├── test/
 │   ├── ReentrancyTest.t.sol
-│   └── SecureBankTest.t.sol
+│   └── SecureBankAttacker.t.sol
 │
 ├── AUDIT.md
 ├── foundry.toml
@@ -89,7 +89,7 @@ reentrancy-lab/
 
 `VulnerableBank.sol` contains the intentionally vulnerable withdrawal function.
 
-The vulnerable logic is:
+The vulnerable logic follows this pattern:
 
 ```solidity
 function withdraw() external {
@@ -108,9 +108,29 @@ function withdraw() external {
 }
 ```
 
+## Root Cause
+
 The problem is the ordering.
 
 The contract performs an external call while the user's balance is still recorded.
+
+```text
+CHECK
+  ↓
+INTERACTION
+  ↓
+EFFECT
+```
+
+The safer pattern is:
+
+```text
+CHECK
+  ↓
+EFFECT
+  ↓
+INTERACTION
+```
 
 ---
 
@@ -144,6 +164,8 @@ The critical condition is:
 External call
       ↓
 State has not been updated yet
+      ↓
+Attacker re-enters
 ```
 
 The attacker can therefore re-enter the withdrawal function before the original invocation reaches:
@@ -162,7 +184,7 @@ The vulnerable bank sends ETH using:
 msg.sender.call{value: amount}("");
 ```
 
-If `msg.sender` is a contract, its fallback or `receive()` function can execute.
+If `msg.sender` is a contract, its `receive()` or fallback function can execute.
 
 The attacker uses this callback to call the bank again.
 
@@ -183,25 +205,33 @@ receive() external payable {
 
 This creates recursive execution.
 
+The number of recursive calls in this lab is intentionally limited:
+
+```solidity
+callCount < 10
+```
+
+This makes the exploit deterministic and prevents uncontrolled recursion during testing.
+
 ---
 
 # Attacker Contract
 
 `Attacker.sol` performs three main tasks.
 
-### 1. Store the target bank
+## 1. Store the target bank
 
 ```solidity
 VulnerableBank public bank;
 ```
 
-### 2. Deposit an initial amount
+## 2. Deposit an initial amount
 
 ```solidity
 bank.deposit{value: amount}();
 ```
 
-### 3. Start the attack
+## 3. Start the attack
 
 ```solidity
 bank.withdraw();
@@ -241,14 +271,6 @@ Attacker.receive()
 Repeat
 ```
 
-The number of recursive calls in this lab is intentionally limited:
-
-```solidity
-callCount < 10
-```
-
-This makes the exploit deterministic and prevents uncontrolled recursion during testing.
-
 ---
 
 # Proof of Concept
@@ -262,7 +284,7 @@ function test_ReentrancyDrainsBank() public
 creates the following environment:
 
 ```text
-Bank balance = 10 ETH
+Bank balance   = 10 ETH
 Attacker deposit = 1 ETH
 ```
 
@@ -270,10 +292,11 @@ The attacker then starts the withdrawal.
 
 The test verifies that:
 
-* Multiple reentrant calls occur
-* The attacker receives more ETH than initially deposited
-* The bank loses ETH
-* The exploit succeeds against the vulnerable implementation
+- Multiple reentrant calls occur
+- More than one withdrawal occurs
+- The attacker receives more ETH than initially deposited
+- The bank loses ETH
+- The exploit succeeds against the vulnerable implementation
 
 The exact result depends on the contract balance and attack parameters.
 
@@ -329,8 +352,6 @@ The correct order is:
 3. INTERACTIONS
 ```
 
----
-
 ## 1. Checks
 
 Validate the withdrawal conditions.
@@ -344,8 +365,6 @@ require(
 );
 ```
 
----
-
 ## 2. Effects
 
 Update the accounting state before the external call.
@@ -354,8 +373,6 @@ Update the accounting state before the external call.
 balances[msg.sender] = 0;
 totalDeposits -= amount;
 ```
-
----
 
 ## 3. Interactions
 
@@ -465,25 +482,32 @@ and is rejected.
 
 The secure implementation demonstrates two complementary protections:
 
-| Protection     | Purpose                                   | Key consideration                                  |
-| -------------- | ----------------------------------------- | -------------------------------------------------- |
-| CEI            | Updates state before external interaction | Requires correct state ordering                    |
-| `nonReentrant` | Prevents nested execution                 | Should complement, not replace, correct accounting |
+| Protection | Purpose | Key consideration |
+|---|---|---|
+| CEI | Updates state before external interaction | Requires correct state ordering |
+| `nonReentrant` | Prevents nested execution | Should complement, not replace, correct accounting |
 
 The important lesson is that a reentrancy guard should not be treated as a substitute for correct state management.
 
+For production systems, a well-tested library implementation such as OpenZeppelin's `ReentrancyGuard` should generally be preferred over maintaining a custom implementation without additional review.
+
 ---
 
-# Testing
+# Testing Strategy
 
 The project uses **Foundry / Forge**.
 
 Testing is divided into:
 
-1. Vulnerability tests
-2. Fuzz tests
-3. Secure implementation tests
-4. Regression tests
+```text
+Vulnerability Tests
+        ↓
+Fuzz Tests
+        ↓
+Secure Implementation Tests
+        ↓
+Regression Tests
+```
 
 ---
 
@@ -501,12 +525,10 @@ test_ReentrancyDrainsBank()
 
 checks that:
 
-* The attacker can execute multiple callbacks
-* More than one withdrawal occurs
-* The attacker receives more than the original deposit
-* The bank balance decreases
-
----
+- The attacker can execute multiple callbacks
+- More than one withdrawal occurs
+- The attacker receives more than the original deposit
+- The bank balance decreases
 
 ## Normal Withdrawal
 
@@ -532,7 +554,7 @@ without using the reentrancy attack.
 
 # Fuzz Testing
 
-The project also includes a Foundry fuzz test:
+The project includes the Foundry fuzz test:
 
 ```solidity
 testFuzz_ReentrancyAlwaysSteals(
@@ -560,9 +582,7 @@ The test verifies that the attacker at least receives back the original deposit 
 
 # SecureBank Tests
 
-`SecureBankTest.t.sol` verifies the defensive implementation.
-
----
+`SecureBankAttacker.t.sol` verifies the defensive implementation.
 
 ## Normal Withdrawal Works
 
@@ -581,8 +601,6 @@ User receives ETH
    ↓
 Recorded balance becomes zero
 ```
-
----
 
 ## Reentrancy Attack Is Blocked
 
@@ -604,8 +622,6 @@ The reentrant attempt is blocked by the secure implementation.
 
 The attacker retains only the amount corresponding to the legitimate deposit.
 
----
-
 ## Balance Is Cleared
 
 The tests also verify:
@@ -620,18 +636,116 @@ This is an important accounting invariant for the withdrawal flow.
 
 ---
 
+# Test Results
+
+The latest recorded Foundry test run produced:
+
+```text
+Ran 2 test suites:
+
+6 tests passed
+0 failed
+0 skipped
+```
+
+## SecureBank Test Suite
+
+```text
+Ran 3 tests for test/SecureBankAttacker.t.sol:SecureBankTest
+
+[PASS] test_BalanceIsZeroAfterWithdraw()
+[PASS] test_NormalWithdrawWorks()
+[PASS] test_ReentrancyGuardBlocksAttack()
+
+Suite result:
+3 passed
+0 failed
+0 skipped
+```
+
+## VulnerableBank Test Suite
+
+```text
+Ran 3 tests for test/ReentrancyTest.t.sol:ReentrancyTest
+
+[PASS] testFuzz_ReentrancyAlwaysSteals(uint256)
+[PASS] test_NormalUserCannotWithdrawMoreThanDeposit()
+[PASS] test_ReentrancyDrainsBank()
+
+Suite result:
+3 passed
+0 failed
+0 skipped
+```
+
+## Overall
+
+| Metric | Result |
+|---|---:|
+| Test suites | **2** |
+| Total tests | **6** |
+| Passed | **6** |
+| Failed | **0** |
+| Skipped | **0** |
+| Fuzz runs | **256** |
+
+All recorded tests passed successfully.
+
+---
+
+# Coverage
+
+The latest `forge coverage` result:
+
+```text
+File                          % Lines        % Statements   % Branches     % Funcs
+
+src/Attacker.sol              87.50% (14/16) 91.67% (11/12) 66.67% (2/3)   75.00% (3/4)
+
+src/SecureBank.sol            90.00% (18/20) 93.75% (15/16) 62.50% (5/8)   75.00% (3/4)
+
+src/VulnerableBank.sol        85.71% (12/14) 90.91% (10/11) 50.00% (3/6)   66.67% (2/3)
+
+test/SecureBankAttacker.t.sol 100.00% (12/12) 100.00% (9/9)  100.00% (2/2)  100.00% (3/3)
+
+Total                         90.32% (56/62) 93.75% (45/48) 63.16% (12/19) 78.57% (11/14)
+```
+
+## Coverage Summary
+
+| Metric | Coverage |
+|---|---:|
+| Lines | **90.32% (56/62)** |
+| Statements | **93.75% (45/48)** |
+| Branches | **63.16% (12/19)** |
+| Functions | **78.57% (11/14)** |
+
+## Contract Coverage
+
+| Contract | Lines | Statements | Branches | Functions |
+|---|---:|---:|---:|---:|
+| `Attacker.sol` | 87.50% | 91.67% | 66.67% | 75.00% |
+| `SecureBank.sol` | 90.00% | 93.75% | 62.50% | 75.00% |
+| `VulnerableBank.sol` | 85.71% | 90.91% | 50.00% | 66.67% |
+
+The test contract `SecureBankAttacker.t.sol` has 100% coverage across lines, statements, branches, and functions.
+
+Coverage is used as an engineering signal and does not by itself establish security or correctness.
+
+---
+
 # Run the Project
 
 ## Prerequisites
 
 Install:
 
-* Foundry
-* Git
+- Foundry
+- Git
 
 ---
 
-## Clone
+# Clone the Repository
 
 ```bash
 git clone https://github.com/Pravinru17/reentrancy-lab.git
@@ -647,6 +761,8 @@ cd reentrancy-lab
 
 # Build
 
+Compile the contracts:
+
 ```bash
 forge build
 ```
@@ -654,6 +770,8 @@ forge build
 ---
 
 # Format
+
+Format the Solidity code:
 
 ```bash
 forge fmt
@@ -668,6 +786,8 @@ forge fmt --check
 ---
 
 # Run Tests
+
+Run the complete test suite:
 
 ```bash
 forge test
@@ -741,27 +861,27 @@ AUDIT.md
 
 The audit documentation covers:
 
-* Vulnerability description
-* Root cause
-* Vulnerable code
-* Attack flow
-* Proof of concept
-* Impact
-* Remediation
-* CEI implementation
-* Reentrancy guard
-* Security recommendations
-* Testing results
+- Vulnerability description
+- Root cause
+- Vulnerable code
+- Attack flow
+- Proof of concept
+- Impact
+- Remediation
+- CEI implementation
+- Reentrancy guard
+- Security recommendations
+- Testing results
 
 ---
 
 # Vulnerability Summary
 
-### Vulnerability
+## Vulnerability
 
 **Single-function reentrancy**
 
-### Root Cause
+## Root Cause
 
 The vulnerable contract performs an external ETH transfer before updating the user's balance.
 
@@ -773,32 +893,30 @@ State update
 
 This allows the recipient contract to execute code while the original state is still unchanged.
 
----
-
-# Impact
+## Impact
 
 In this controlled educational lab, the vulnerable bank can lose ETH through repeated withdrawals against the attacker's unchanged recorded balance.
 
 The practical impact of the same vulnerability in a real application would depend on:
 
-* Contract balance
-* Attacker-controlled state
-* Withdrawal logic
-* Other accounting mechanisms
-* Available liquidity
-* Additional access controls
+- Contract balance
+- Attacker-controlled state
+- Withdrawal logic
+- Other accounting mechanisms
+- Available liquidity
+- Additional access controls
 
 ---
 
 # Remediation
 
-The project demonstrates two remediation techniques:
+The project demonstrates two remediation techniques.
 
-### 1. Checks-Effects-Interactions
+## 1. Checks-Effects-Interactions
 
 Update internal accounting before making the external call.
 
-### 2. Reentrancy Guard
+## 2. Reentrancy Guard
 
 Prevent the protected function from being entered recursively during the same execution.
 
@@ -810,21 +928,21 @@ For production systems, a well-tested library implementation such as OpenZeppeli
 
 This project demonstrates several important smart-contract security principles.
 
-### 1. External calls are trust boundaries
+## 1. External Calls Are Trust Boundaries
 
 A contract should treat calls to unknown contracts as potentially executing arbitrary code.
 
-### 2. State should be updated before external interaction
+## 2. State Should Be Updated Before External Interaction
 
 This is the central principle behind CEI.
 
-### 3. Reentrancy is about execution flow
+## 3. Reentrancy Is About Execution Flow
 
 The attacker does not need to directly modify the bank's storage.
 
 Instead, the attacker takes advantage of the fact that the bank temporarily exposes an inconsistent state during execution.
 
-### 4. Tests should reproduce real attack paths
+## 4. Tests Should Reproduce Real Attack Paths
 
 A security test should demonstrate:
 
@@ -837,7 +955,7 @@ Impact
      ↓
 Fix
      ↓
-Regression test
+Regression Test
 ```
 
 ---
@@ -846,19 +964,47 @@ Regression test
 
 By completing this project, I practiced:
 
-* Solidity external calls
-* ETH transfers
-* `receive()` functions
-* EVM execution flow
-* Reentrant execution
-* State accounting
-* CEI
-* Reentrancy guards
-* Foundry testing
-* Fuzz testing
-* Attack simulation
-* Security regression testing
-* Vulnerability documentation
+- Solidity external calls
+- ETH transfers
+- `receive()` functions
+- EVM execution flow
+- Reentrant execution
+- State accounting
+- Checks-Effects-Interactions
+- Reentrancy guards
+- Foundry testing
+- Fuzz testing
+- Attack simulation
+- Security regression testing
+- Vulnerability documentation
+
+---
+
+# What This Project Demonstrates
+
+The project demonstrates a practical security workflow rather than only theoretical knowledge:
+
+```text
+Solidity
+   ↓
+Understand Vulnerability
+   ↓
+Reproduce Exploit
+   ↓
+Build PoC
+   ↓
+Understand Root Cause
+   ↓
+Implement CEI
+   ↓
+Add Reentrancy Protection
+   ↓
+Write Regression Tests
+   ↓
+Run Fuzz Tests
+   ↓
+Document Findings
+```
 
 ---
 
@@ -870,7 +1016,14 @@ They should **never be deployed with real funds**.
 
 `SecureBank.sol` demonstrates defensive techniques but should not be considered production-ready solely because these tests pass.
 
-Production smart contracts require additional testing, static analysis, integration testing, and appropriate security review.
+Production smart contracts require additional:
+
+- Testing
+- Static analysis
+- Integration testing
+- Security review
+- Economic analysis where applicable
+- Formal verification where appropriate
 
 ---
 
@@ -880,7 +1033,9 @@ Production smart contracts require additional testing, static analysis, integrat
 
 Junior Solidity / Blockchain Developer
 
-GitHub: https://github.com/Pravinru17
+### GitHub
+
+https://github.com/Pravinru17
 
 ---
 
